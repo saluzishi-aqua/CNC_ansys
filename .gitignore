@@ -1,0 +1,90 @@
+# Visual Studio 文件和目录
+.vs/
+*.vcxproj.user
+*.vcxproj.filters
+*.sln.docstates
+dependencies/
+
+# 编译输出目录
+x64/
+Cudatest2/x64/
+
+# 编译中间文件
+*.obj
+*.pdb
+*.idb
+*.ilk
+*.exp
+*.exe
+
+# Visual Studio 临时文件
+*.tmp
+*.tmp_proj
+*_wpftmp.csproj
+
+# 预编译头文件
+*.pch
+
+# 日志文件
+*.log
+*.tlog
+*.Build.CppClean.log
+vcpkg.applocal.log
+
+# Visual Studio 数据库文件
+*.db
+*-shm
+*-wal
+*.opendb
+*.suo
+*.sdf
+
+# IntelliSense 文件
+*.ipch/
+*.ncb
+
+# CUDA 编译文件
+*.cubin
+*.ptx
+*.fatbin
+*.cudafe1.c
+*.cudafe1.cpp
+*.cudafe1.gpu
+*.cudafe1.stub.c
+*.cudafe1.stub.cpp
+*.cudafe2.c
+*.cudafe2.cpp
+*.cudafe2.gpu
+*.cmodel.c
+*.module_id
+*.cudafe1.pp
+*.cudafe2.pp
+*.cpp1.ii
+*.cpp2.ii
+*.cpp3.ii
+*.cpp4.ii
+*.cudafe1.list
+*.cudafe2.list
+*.fatbin.c
+*.cuda.cpp
+*.hash
+*.cudafe1.o
+*.cudafe2.o
+*.cudafe1.exe
+*.cudafe2.exe
+*.cu.cache/
+*.cu.deps
+*.cu.obj
+
+# 项目文件备份
+*.bak
+*.cache
+
+# 包目录
+packages/
+
+# 本地化文件
+*.local
+
+# 其他临时文件
+*.opensdf
