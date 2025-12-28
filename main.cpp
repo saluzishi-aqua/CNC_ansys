@@ -2,11 +2,13 @@
 #include <GL/glut.h>
 #include <cuda_runtime.h>
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <random>
 #include <chrono>
 #include <string>
 #include <cmath>
+#include <ctime>
 #include <algorithm>
 #include "line_surface_intersection.cuh"
 
@@ -22,6 +24,25 @@ vector<Line> visibleLines; // Óë lines ¶ÔÆë£¨ÏàÍ¬´óĞ¡£©£¬Ö»ÓĞ validFlags[i]==1 Ê
 float gpuTime = 0.0f;  // GPU¼ÆËãÊ±¼ä£¨ºÁÃë£©
 float cpuTime = 0.0f;  // CPU¼ÆËãÊ±¼ä£¨ºÁÃë£©
 float speedup = 0.0f;  // ¼ÓËÙ±È
+GPUPerformanceMetrics gpuMetrics;  // GPUÏêÏ¸Ö¸±ê
+
+// ¶¯»­ÏµÍ³±äÁ¿
+bool animationEnabled = true;      // ÊÇ·ñÆôÓÃ¶¯»­
+float animationTime = 0.0f;        // ¶¯»­Ê±¼ä£¨Ãë£©
+float cylinderPosX = 6.0f;         // Ô²ÖùÌåÖĞĞÄXÎ»ÖÃ£¨Ï³µ¶Óë¹¤¼şÔ²ÖùÌåÍâÇĞ£º3.0+3.0=6.0£©
+float cylinderPosY = 0.0f;         // Ô²ÖùÌåÖĞĞÄYÎ»ÖÃ
+float cylinderPosZ = 0.0f;         // Ô²ÖùÌåÖĞĞÄZÎ»ÖÃ
+const float ANIMATION_SPEED = 2.0f;  // ¶¯»­ËÙ¶È£¨ÌáÉıµ½2.0¼Ó¿ìÇĞÏ÷£©
+const float ANIMATION_RADIUS = 6.0f; // Ô²ÖùÌåÔË¶¯¹ì¼£°ë¾¶£¨¹¤¼ş°ë¾¶3.0 + Ï³µ¶°ë¾¶3.0 = 6.0£¬Ï³µ¶ÍâÇĞÓÚ»ÆÉ«½»Ïß£©
+
+// Ï³Ï÷Â·¾¶ÀúÊ·¼ÇÂ¼£¨ÓÃÓÚÀÛ»ı²ÄÁÏÒÆ³ı£©
+vector<CylinderPosition> millingPath;  // ¼ÇÂ¼ËùÓĞ¾­¹ıµÄÔ²ÖùÌåÎ»ÖÃ
+const int MAX_PATH_POINTS = 500;       // ÏŞÖÆÂ·¾¶µãÊı£¬Æ½ºâĞÔÄÜºÍĞ§¹û£¨500µãÔ¼1.3È¦£¬±£Áô¸ü³¤ÇĞÏ÷ÀúÊ·£©
+const float PATH_SAMPLE_DISTANCE = 0.02f; // Â·¾¶²ÉÑù¾àÀë£¨Ôö´óµ½0.02¼Ó¿ìËÙ¶È£¬¼õÉÙÂ·¾¶µã£©
+
+// ÖÜÆÚ¼ÆÊı
+int cycleCount = 0;                    // ÒÑÍê³ÉÖÜÆÚÊı
+float lastAngle = 0.0f;                // ÉÏÒ»Ö¡½Ç¶È£¨ÓÃÓÚ¼ì²â¹ıÁãµã£©
 
 // Ïà»ú¿ØÖÆ±äÁ¿
 float cameraAngleX = 30.0f;
@@ -72,27 +93,33 @@ struct Segment {
 vector<float> lineBoxIntersection(const Line& line) {
     vector<float> t_values;
     
+    // ¶Ô³¤·½Ìå³ß´çÇáÎ¢ÄÚËõ£¬±ÜÃâ±ß½çÔëµã
+    const float BOX_SHRINK = 0.02f;
+    float widthHalf = BOX_WIDTH/2.0f - BOX_SHRINK;
+    float depthHalf = BOX_DEPTH/2.0f - BOX_SHRINK;
+    float heightHalf = BOX_HEIGHT/2.0f - BOX_SHRINK;
+    
     // ¶ÔÈı¸öÖáÏòµÄÆ½Ãæ½øĞĞÇó½»
     // X·½ÏòµÄÁ½¸öÃæ
     if (fabs(line.direction.x) > 1e-6f) {
-        float t1 = (-BOX_WIDTH/2.0f - line.origin.x) / line.direction.x;
-        float t2 = (BOX_WIDTH/2.0f - line.origin.x) / line.direction.x;
+        float t1 = (-widthHalf - line.origin.x) / line.direction.x;
+        float t2 = (widthHalf - line.origin.x) / line.direction.x;
         t_values.push_back(t1);
         t_values.push_back(t2);
     }
     
     // Y·½ÏòµÄÁ½¸öÃæ
     if (fabs(line.direction.y) > 1e-6f) {
-        float t1 = (-BOX_DEPTH/2.0f - line.origin.y) / line.direction.y;
-        float t2 = (BOX_DEPTH/2.0f - line.origin.y) / line.direction.y;
+        float t1 = (-depthHalf - line.origin.y) / line.direction.y;
+        float t2 = (depthHalf - line.origin.y) / line.direction.y;
         t_values.push_back(t1);
         t_values.push_back(t2);
     }
     
     // Z·½ÏòµÄÁ½¸öÃæ
     if (fabs(line.direction.z) > 1e-6f) {
-        float t1 = (-BOX_HEIGHT/2.0f - line.origin.z) / line.direction.z;
-        float t2 = (BOX_HEIGHT/2.0f - line.origin.z) / line.direction.z;
+        float t1 = (-heightHalf - line.origin.z) / line.direction.z;
+        float t2 = (heightHalf - line.origin.z) / line.direction.z;
         t_values.push_back(t1);
         t_values.push_back(t2);
     }
@@ -123,7 +150,7 @@ vector<float> lineBoxIntersection(const Line& line) {
     return result;
 }
 
-// ²¼¶û¼õ·¨ÔËËã£º¼ÆËãÔ²ÖùÌå - ³¤·½ÌåµÄTri-DexelÄ£ĞÍ£¨µ÷ÓÃGPU°æ±¾£©
+// ²¼¶û¼õ·¨ÔËËã£º¼ÆËãÔ²ÖùÌåÂ·¾¶ - ³¤·½ÌåµÄTri-DexelÄ£ĞÍ£¨µ÷ÓÃGPUÓÅ»¯°æ±¾£©
 void computeBooleanSubtraction() {
     int gridPoints = static_cast<int>(PLANE_SIZE / GRID_SPACING) + 1;
     int linesPerPlane = gridPoints * gridPoints;
@@ -132,26 +159,28 @@ void computeBooleanSubtraction() {
     validFlags.resize(lines.size());
     visibleLines.resize(lines.size());
     
-    // µ÷ÓÃGPU²¢ĞĞ¼ÆËã
-    computeBooleanSubtractionGPU(
-        lines,
+    // µ÷ÓÃGPUÓÅ»¯°æ±¾£¨tri-dexelÊı¾İÒÑÔÚGPUÏÔ´æÖĞ£¬Ö»´«ÊäÏ³µ¶Â·¾¶£©
+    computeBooleanSubtractionGPU_Optimized(
         intersections,
         validFlags,
         visibleLines,
         linesPerPlane,
         CYLINDER_RADIUS,
         CYLINDER_HEIGHT,
+        millingPath,  // ´«ÈëÕû¸öÂ·¾¶ÀúÊ·
         BOX_WIDTH,
         BOX_DEPTH,
-        BOX_HEIGHT
+        BOX_HEIGHT,
+        &gpuMetrics
     );
 }
 
-// CPU°æ±¾µÄ²¼¶û¼õ·¨ÔËËã£¨ÓÃÓÚĞÔÄÜ¶Ô±È£©
-void computeBooleanSubtractionCPU() {
+// CPU°æ±¾µÄ²¼¶û¼õ·¨ÔËËã£¨ÓÃÓÚĞÔÄÜ¶Ô±È£¬ÏÖÔÚÒ²´¦ÀíÂ·¾¶µã£©
+void computeBooleanSubtractionCPU(const vector<CylinderPosition>& cylinderPositions) {
     int gridPoints = static_cast<int>(PLANE_SIZE / GRID_SPACING) + 1;
     int linesPerPlane = gridPoints * gridPoints;
     int total = lines.size();
+    int numCylinders = cylinderPositions.size();
 
     // ÁÙÊ±±äÁ¿£¬²»Ó°ÏìÊµ¼Ê½á¹û
     vector<Point3D> temp_intersections(total, Point3D(0,0,0));
@@ -164,92 +193,140 @@ void computeBooleanSubtractionCPU() {
         // ¼ÆËãÓë³¤·½ÌåµÄ½»Ïß¶Î
         vector<float> box_t = lineBoxIntersection(L);
         
-        // ¸ù¾İ·½Ïò¼ÆËãÓëÔ²ÖùÌåµÄ½»Ïß¶Î
-        vector<Segment> cylinder_segs;
-        vector<Segment> box_segs;
+        // ÊÕ¼¯ËùÓĞÔ²ÖùÌåÂ·¾¶Î»ÖÃµÄ½»Ïß¶Î£¨ÀàËÆGPU kernel£©
+        vector<Segment> removed_segs;  // ËùÓĞĞèÒªÒÆ³ıµÄÇø¼ä
         
-        if (i < linesPerPlane) {
-            // Z ·½ÏòÏß£ºx,y ³£Á¿
-            float x = L.origin.x;
-            float y = L.origin.y;
-            if (x*x + y*y <= CYLINDER_RADIUS*CYLINDER_RADIUS) {
-                float cyl_z_start = -CYLINDER_HEIGHT/2.0f;
-                float cyl_z_end = CYLINDER_HEIGHT/2.0f;
-                cylinder_segs.push_back(Segment(cyl_z_start, cyl_z_end));
-            }
+        // ±éÀúËùÓĞÔ²ÖùÌåÎ»ÖÃ
+        for (int c = 0; c < numCylinders; ++c) {
+            float cylinderCenterX = cylinderPositions[c].x;
+            float cylinderCenterY = cylinderPositions[c].y;
+            float cylinderCenterZ = cylinderPositions[c].z;
             
-            if (box_t.size() >= 2) {
-                box_segs.push_back(Segment(box_t[0], box_t[1]));
-            }
-        } else if (i < 2*linesPerPlane) {
-            // Y ·½ÏòÏß
-            float x = L.origin.x;
-            float z = L.origin.z;
-            if (x*x <= CYLINDER_RADIUS*CYLINDER_RADIUS && fabs(z) <= CYLINDER_HEIGHT/2.0f) {
-                float delta = sqrt(CYLINDER_RADIUS*CYLINDER_RADIUS - x*x);
-                cylinder_segs.push_back(Segment(-delta, delta));
-            }
-            
-            if (box_t.size() >= 2) {
-                box_segs.push_back(Segment(box_t[0], box_t[1]));
-            }
-        } else {
-            // X ·½ÏòÏß
-            float y = L.origin.y;
-            float z = L.origin.z;
-            if (y*y <= CYLINDER_RADIUS*CYLINDER_RADIUS && fabs(z) <= CYLINDER_HEIGHT/2.0f) {
-                float delta = sqrt(CYLINDER_RADIUS*CYLINDER_RADIUS - y*y);
-                cylinder_segs.push_back(Segment(-delta, delta));
-            }
-            
-            if (box_t.size() >= 2) {
-                box_segs.push_back(Segment(box_t[0], box_t[1]));
+            if (i < linesPerPlane) {
+                // Z ·½ÏòÏß£ºx,y ³£Á¿
+                float x = L.origin.x - cylinderCenterX;
+                float y = L.origin.y - cylinderCenterY;
+                float radiusCheck = CYLINDER_RADIUS - 0.01f;  // ÇáÎ¢ÊÕËõ°ë¾¶±ÜÃâ±ßÔµÔëµã
+                if (x*x + y*y < radiusCheck*radiusCheck) {  // Ê¹ÓÃ<¶ø²»ÊÇ<=
+                    float cyl_z_start = cylinderCenterZ - CYLINDER_HEIGHT/2.0f;
+                    float cyl_z_end = cylinderCenterZ + CYLINDER_HEIGHT/2.0f;
+                    removed_segs.push_back(Segment(cyl_z_start - L.origin.z, cyl_z_end - L.origin.z));
+                }
+            } else if (i < 2*linesPerPlane) {
+                // Y ·½ÏòÏß
+                float x = L.origin.x - cylinderCenterX;
+                float z = L.origin.z - cylinderCenterZ;
+                float radiusCheck = CYLINDER_RADIUS - 0.01f;  // ÇáÎ¢ÊÕËõ°ë¾¶
+                if (x*x < radiusCheck*radiusCheck && fabs(z) < CYLINDER_HEIGHT/2.0f) {  // Ê¹ÓÃ<
+                    float delta = sqrt(radiusCheck*radiusCheck - x*x);
+                    removed_segs.push_back(Segment(cylinderCenterY - delta - L.origin.y, 
+                                                   cylinderCenterY + delta - L.origin.y));
+                }
+            } else {
+                // X ·½ÏòÏß
+                float y = L.origin.y - cylinderCenterY;
+                float z = L.origin.z - cylinderCenterZ;
+                float radiusCheck = CYLINDER_RADIUS - 0.01f;  // ÇáÎ¢ÊÕËõ°ë¾¶
+                if (y*y < radiusCheck*radiusCheck && fabs(z) < CYLINDER_HEIGHT/2.0f) {  // Ê¹ÓÃ<
+                    float delta = sqrt(radiusCheck*radiusCheck - y*y);
+                    removed_segs.push_back(Segment(cylinderCenterX - delta - L.origin.x, 
+                                                   cylinderCenterX + delta - L.origin.x));
+                }
             }
         }
         
-        // ²¼¶û¼õ·¨£ºÔ²ÖùÌå - ³¤·½Ìå
-        vector<Segment> result_segs;
-        for (const Segment& c : cylinder_segs) {
-            float start = c.t_start;
-            float end = c.t_end;
-            
-            for (const Segment& b : box_segs) {
-                if (b.t_start <= start && b.t_end >= end) {
-                    start = end;
-                    break;
-                } else if (b.t_start > start && b.t_start < end) {
-                    if (b.t_end < end) {
-                        result_segs.push_back(Segment(start, b.t_start));
-                        start = b.t_end;
-                    } else {
-                        end = b.t_start;
+        // ³¤·½ÌåÏß¶Î
+        vector<Segment> box_segs;
+        
+        if (box_t.size() >= 2) {
+            box_segs.push_back(Segment(box_t[0], box_t[1]));
+        }
+        
+        // Èç¹ûÃ»ÓĞ³¤·½Ìå½»¼¯»òÃ»ÓĞÒÆ³ıÇø¼ä£¬Ìø¹ı
+        if (box_segs.empty()) continue;
+        
+        // ÅÅĞò²¢ºÏ²¢ÒÆ³ıÇø¼ä£¨Ìí¼ÓepsilonÈİ²î´¦Àí¸¡µã¾«¶È£©
+        const float EPSILON = 0.0001f;  // ¸¡µã¾«¶ÈÈİ²î
+        sort(removed_segs.begin(), removed_segs.end(), 
+             [](const Segment& a, const Segment& b) { return a.t_start < b.t_start; });
+        
+        vector<Segment> merged_removed;
+        for (const auto& seg : removed_segs) {
+            if (merged_removed.empty() || seg.t_start > merged_removed.back().t_end + EPSILON) {
+                merged_removed.push_back(seg);
+            } else {
+                merged_removed.back().t_end = max(merged_removed.back().t_end, seg.t_end);
+            }
+        }
+        
+        // ²¼¶û¼õ·¨£º³¤·½Ìå - ËùÓĞÔ²ÖùÌå£¨±£Áô×î³¤Ê£ÓàÆ¬¶Î£¬±ÜÃâĞ¡Í»´Ì£©
+        float box_start = box_segs[0].t_start;
+        float box_end = box_segs[0].t_end;
+        const float MIN_SEGMENT_LENGTH = 0.1f;  // ×îĞ¡Ïß¶Î³¤¶ÈãĞÖµ
+        
+        float longest_start = 0.0f;
+        float longest_end = 0.0f;
+        float longest_len = -1.0f;
+        float cursor = box_start;
+        
+        for (const auto& rem : merged_removed) {
+            if (rem.t_end < box_start + EPSILON) {
+                continue;
+            }
+            if (rem.t_start > box_end - EPSILON) {
+                if (cursor < box_end - EPSILON) {
+                    float seg_len = box_end - cursor;
+                    if (seg_len > longest_len) {
+                        longest_len = seg_len;
+                        longest_start = cursor;
+                        longest_end = box_end;
                     }
-                } else if (b.t_end > start && b.t_end < end) {
-                    start = b.t_end;
+                }
+                cursor = box_end;
+                break;
+            }
+            
+            float seg_start = cursor;
+            float seg_end = min(rem.t_start, box_end);
+            if (seg_end > seg_start + EPSILON) {
+                float seg_len = seg_end - seg_start;
+                if (seg_len > longest_len) {
+                    longest_len = seg_len;
+                    longest_start = seg_start;
+                    longest_end = seg_end;
                 }
             }
             
-            if (end > start) {
-                result_segs.push_back(Segment(start, end));
+            cursor = max(cursor, rem.t_end);
+            if (cursor >= box_end - EPSILON) {
+                break;
             }
         }
         
-        if (!result_segs.empty()) {
+        if (cursor < box_end - EPSILON) {
+            float seg_len = box_end - cursor;
+            if (seg_len > longest_len) {
+                longest_len = seg_len;
+                longest_start = cursor;
+                longest_end = box_end;
+            }
+        }
+        
+        if (longest_len >= MIN_SEGMENT_LENGTH) {
             temp_validFlags[i] = 1;
-            const Segment& seg = result_segs[0];
-            float t_mid = (seg.t_start + seg.t_end) / 2.0f;
+            float t_mid = (longest_start + longest_end) / 2.0f;
             
             if (i < linesPerPlane) {
-                temp_visibleLines[i].origin = Point3D(L.origin.x, L.origin.y, seg.t_start);
-                temp_visibleLines[i].direction = Point3D(0, 0, seg.t_end - seg.t_start);
+                temp_visibleLines[i].origin = Point3D(L.origin.x, L.origin.y, longest_start);
+                temp_visibleLines[i].direction = Point3D(0, 0, longest_end - longest_start);
                 temp_intersections[i] = Point3D(L.origin.x, L.origin.y, t_mid);
             } else if (i < 2*linesPerPlane) {
-                temp_visibleLines[i].origin = Point3D(L.origin.x, seg.t_start, L.origin.z);
-                temp_visibleLines[i].direction = Point3D(0, seg.t_end - seg.t_start, 0);
+                temp_visibleLines[i].origin = Point3D(L.origin.x, longest_start, L.origin.z);
+                temp_visibleLines[i].direction = Point3D(0, longest_end - longest_start, 0);
                 temp_intersections[i] = Point3D(L.origin.x, t_mid, L.origin.z);
             } else {
-                temp_visibleLines[i].origin = Point3D(seg.t_start, L.origin.y, L.origin.z);
-                temp_visibleLines[i].direction = Point3D(seg.t_end - seg.t_start, 0, 0);
+                temp_visibleLines[i].origin = Point3D(longest_start, L.origin.y, L.origin.z);
+                temp_visibleLines[i].direction = Point3D(longest_end - longest_start, 0, 0);
                 temp_intersections[i] = Point3D(t_mid, L.origin.y, L.origin.z);
             }
         }
@@ -537,6 +614,35 @@ void drawCoordinateSystem() {
     glLineWidth(1.0f);
 }
 
+// »æÖÆÃ«Å÷ºìÉ«Ïß¿ò£¨Ö»ÏÔÊ¾±ß½ç£©
+void drawBoxWireframe() {
+    const float w = BOX_WIDTH / 2.0f;
+    const float d = BOX_DEPTH / 2.0f;
+    const float h = BOX_HEIGHT / 2.0f;
+
+    // »æÖÆ³¤·½ÌåºìÉ«±ß¿ò
+    glColor4f(1.0f, 0.2f, 0.2f, 1.0f);  // ºìÉ«
+    glLineWidth(3.0f);
+    glBegin(GL_LINES);
+    // µ×ÃæËÄÌõ±ß
+    glVertex3f(-w, -d, -h); glVertex3f(w, -d, -h);
+    glVertex3f(w, -d, -h); glVertex3f(w, d, -h);
+    glVertex3f(w, d, -h); glVertex3f(-w, d, -h);
+    glVertex3f(-w, d, -h); glVertex3f(-w, -d, -h);
+    // ¶¥ÃæËÄÌõ±ß
+    glVertex3f(-w, -d, h); glVertex3f(w, -d, h);
+    glVertex3f(w, -d, h); glVertex3f(w, d, h);
+    glVertex3f(w, d, h); glVertex3f(-w, d, h);
+    glVertex3f(-w, d, h); glVertex3f(-w, -d, h);
+    // ËÄÌõÊú±ß
+    glVertex3f(-w, -d, -h); glVertex3f(-w, -d, h);
+    glVertex3f(w, -d, -h); glVertex3f(w, -d, h);
+    glVertex3f(w, d, -h); glVertex3f(w, d, h);
+    glVertex3f(-w, d, -h); glVertex3f(-w, d, h);
+    glEnd();
+    glLineWidth(1.0f);
+}
+
 void drawBox() {
     const float w = BOX_WIDTH / 2.0f;
     const float d = BOX_DEPTH / 2.0f;
@@ -594,6 +700,9 @@ void drawCylinder() {
     const float height = CYLINDER_HEIGHT;
     const float radius = CYLINDER_RADIUS;
 
+    glPushMatrix();
+    glTranslatef(cylinderPosX, cylinderPosY, cylinderPosZ);  // ¶¯Ì¬Î»ÖÃ
+
     // »æÖÆÔ²ÖùÌå²àÃæ£¨°ëÍ¸Ã÷Ìî³ä£©
     glColor4f(0.3f, 0.5f, 0.8f, 0.5f);
     glBegin(GL_QUADS);
@@ -648,6 +757,8 @@ void drawCylinder() {
     }
     glEnd();
     glLineWidth(1.0f);
+    
+    glPopMatrix();  // »Ö¸´±ä»»¾ØÕó
 }
 
 void drawIntersections() {
@@ -696,35 +807,69 @@ void drawText() {
         else ++xCnt;
     }
 
-    // µÚÒ»ĞĞ£º¼¸ºÎÌåĞÅÏ¢
-    string info = "Ô²ÖùÌå: °ë¾¶=" + to_string(CYLINDER_RADIUS) + ", ¸ß¶È=" + to_string(CYLINDER_HEIGHT)
-        + " | ½»µã: Z:" + to_string(zCnt) + " Y:" + to_string(yCnt) + " X:" + to_string(xCnt)
-        + " | ÏÔÊ¾Ïß¶Î:" + to_string(count(validFlags.begin(), validFlags.end(), 1));
-    glRasterPos2f(10, 70);
-    for (char c : info) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
+    // µÚÒ»ĞĞ£ºÖÜÆÚºÍÏ³Ï÷ĞÅÏ¢£¨¸ßÁÁÏÔÊ¾£©
+    glColor3f(1.0f, 0.5f, 0.0f);  // ³ÈÉ«
+    char cycleInfo[256];
+    sprintf_s(cycleInfo, "ÖÜÆÚ: %d | Ï³Ï÷Â·¾¶: %d µã | ½»µã: Z:%d Y:%d X:%d | ÏÔÊ¾Ïß¶Î: %d",
+              cycleCount, (int)millingPath.size(), zCnt, yCnt, xCnt,
+              (int)count(validFlags.begin(), validFlags.end(), 1));
+    glRasterPos2f(10, 130);
+    for (int i = 0; cycleInfo[i] != '\0'; ++i) {
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, cycleInfo[i]);
+    }
+    
+    // µÚ¶şĞĞ£º¼¸ºÎÌåĞÅÏ¢
+    glColor3f(1, 1, 1);
+    char geoInfo[256];
+    sprintf_s(geoInfo, "Ô²ÖùÌå: °ë¾¶=%.1f ¸ß¶È=%.1f | Î»ÖÃ=(%.2f, %.2f, %.2f)",
+              CYLINDER_RADIUS, CYLINDER_HEIGHT, cylinderPosX, cylinderPosY, cylinderPosZ);
+    glRasterPos2f(10, 110);
+    for (int i = 0; geoInfo[i] != '\0'; ++i) {
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, geoInfo[i]);
+    }
 
-    // µÚ¶şĞĞ£ºGPUĞÔÄÜĞÅÏ¢£¨»ÆÉ«¸ßÁÁ£©
+    // µÚ¶şĞĞ£ºÊµÊ±¼ÆËãĞÔÄÜ¶Ô±È£¨»ÆÉ«¸ßÁÁ£©
     glColor3f(1.0f, 1.0f, 0.0f);
     char perfInfo[256];
-    sprintf_s(perfInfo, "GPU¼ÓËÙ: CPUºÄÊ±=%.2fms | GPUºÄÊ±=%.2fms | ¼ÓËÙ±È=%.2fx (GPU±ÈCPU¿ì%.1f±¶)", 
-              cpuTime, gpuTime, speedup, speedup);
-    glRasterPos2f(10, 50);
+    sprintf_s(perfInfo, "ÊµÊ±¶Ô±È CPU: %.2fms | GPU: %.2fms | ¼ÓËÙ±È: %.2fx | Â·¾¶µã: %d", 
+              cpuTime, gpuTime, speedup, (int)millingPath.size());
+    glRasterPos2f(10, 90);
     for (int i = 0; perfInfo[i] != '\0'; ++i) {
         glutBitmapCharacter(GLUT_BITMAP_9_BY_15, perfInfo[i]);
     }
+    
+    // µÚÈıĞĞ£ºGPUÏêÏ¸Ö¸±ê£¨ÇàÉ«£©
+    glColor3f(0.3f, 0.9f, 1.0f);
+    char detailInfo[512];
+    sprintf_s(detailInfo, "GPUÏêÏ¸: ÄÚºË=%.2fms | H2D=%.2fms | D2H=%.2fms | ÏÔ´æ=%.2fMB | Ïß³Ì=%dx%d | ÉäÏß=%d | ½»µã=%d",
+              gpuMetrics.kernelExecution, gpuMetrics.memcpyH2D, gpuMetrics.memcpyD2H,
+              gpuMetrics.deviceMemoryUsed / (1024.0f * 1024.0f),
+              gpuMetrics.gridSize, gpuMetrics.blockSize,
+              gpuMetrics.processedRays, gpuMetrics.validIntersections);
+    glRasterPos2f(10, 70);
+    for (int i = 0; detailInfo[i] != '\0'; ++i) {
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, detailInfo[i]);
+    }
 
-    // µÚÈıĞĞ£º¿ØÖÆËµÃ÷
+    // µÚËÄĞĞ£º¿ØÖÆËµÃ÷
     glColor3f(1,1,1);
-    string controls = "¿ØÖÆ: Êó±êĞı×ª, W/SËõ·Å, RÖØÖÃ, P´òÓ¡×ø±ê, ESCÍË³ö";
-    glRasterPos2f(10, 30);
+    string controls = "¿ØÖÆ: Êó±êĞı×ª, WËõ·Å, RÖØÖÃ, S±£´æSTL, SPACE ÔİÍ£/²¥·Å, P´òÓ¡×ø±ê, ESCÍË³ö";
+    glRasterPos2f(10, 50);
     for (char c : controls) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
     
-    // µÚËÄĞĞ£ºÊı¾İ¹æÄ£
+    // µÚÎåĞĞ£ºÊı¾İ¹æÄ£
     glColor3f(0.7f, 0.7f, 0.7f);
     string dataInfo = "²âÊÔ¹æÄ£: " + to_string(lines.size()) + " ÌõÉäÏß, " 
                     + to_string(gridPoints) + "x" + to_string(gridPoints) + " Íø¸ñ";
-    glRasterPos2f(10, 10);
+    glRasterPos2f(10, 30);
     for (char c : dataInfo) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
+    
+    // µÚÁùĞĞ£º¶¯»­×´Ì¬£¨ÂÌÉ«£©
+    glColor3f(0.3f, 1.0f, 0.3f);
+    string animInfo = "¶¯»­×´Ì¬: " + string(animationEnabled ? "²¥·ÅÖĞ" : "ÒÑÔİÍ£") 
+                    + " | Ê±¼ä: " + to_string(animationTime) + "s";
+    glRasterPos2f(10, 10);
+    for (char c : animInfo) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
 
     glPopMatrix();
     glMatrixMode(GL_PROJECTION);
@@ -748,6 +893,168 @@ void drawLines() {
     glLineWidth(1.0f);
 }
 
+// µ¼³öTri-Dexel½á¹ûµ½STLÎÄ¼ş
+void exportToSTL(const string& filename) {
+    ofstream file(filename);
+    if (!file.is_open()) {
+        cerr << "ÎŞ·¨´´½¨STLÎÄ¼ş: " << filename << endl;
+        return;
+    }
+    
+    cout << "¿ªÊ¼µ¼³öSTLÎÄ¼ş: " << filename << endl;
+    
+    // STL ASCII¸ñÊ½Í·
+    file << "solid TriDexelModel\n";
+    
+    int triangleCount = 0;
+    
+    // ±éÀúËùÓĞÓĞĞ§µÄtri-dexelÏß¶Î
+    for (int i = 0; i < lines.size(); ++i) {
+        if (!validFlags[i]) continue;
+        
+        const Line& seg = visibleLines[i];
+        Point3D start = seg.origin;
+        Point3D end;
+        end.x = seg.origin.x + seg.direction.x;
+        end.y = seg.origin.y + seg.direction.y;
+        end.z = seg.origin.z + seg.direction.z;
+        
+        // ÎªÃ¿ÌõÏß¶Î´´½¨Ò»¸öÏ¸Ô²ÖùÌå£¨ÓÃÈı½ÇĞÎ½üËÆ£©
+        const float lineRadius = 0.05f;  // Ïß¶Î°ë¾¶
+        const int segments = 6;  // 6±ßĞÎ½üËÆÔ²Öù
+        
+        // ÎªÔ²ÖùÌåµÄÃ¿¸ö²àÃæ´´½¨Á½¸öÈı½ÇĞÎ
+        for (int j = 0; j < segments; ++j) {
+            float angle1 = 2.0f * M_PI * j / segments;
+            float angle2 = 2.0f * M_PI * (j + 1) / segments;
+            
+            float cos1 = cosf(angle1), sin1 = sinf(angle1);
+            float cos2 = cosf(angle2), sin2 = sinf(angle2);
+            
+            // ¼ÆËã4¸ö¶¥µã£¨¸ù¾İÏß¶Î·½Ïò£©
+            Point3D v1, v2, v3, v4;
+            
+            // ¼ÆËã´¹Ö±ÓÚÏß¶ÎµÄÁ½¸öÕı½»ÏòÁ¿
+            Point3D dir = {end.x - start.x, end.y - start.y, end.z - start.z};
+            float len = sqrtf(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+            if (len < 1e-6f) continue;
+            dir.x /= len; dir.y /= len; dir.z /= len;
+            
+            Point3D perp1, perp2;
+            if (fabsf(dir.z) < 0.9f) {
+                perp1 = {-dir.y, dir.x, 0};
+            } else {
+                perp1 = {0, -dir.z, dir.y};
+            }
+            float plen1 = sqrtf(perp1.x*perp1.x + perp1.y*perp1.y + perp1.z*perp1.z);
+            perp1.x /= plen1; perp1.y /= plen1; perp1.z /= plen1;
+            
+            perp2.x = dir.y*perp1.z - dir.z*perp1.y;
+            perp2.y = dir.z*perp1.x - dir.x*perp1.z;
+            perp2.z = dir.x*perp1.y - dir.y*perp1.x;
+            
+            float offset1x = lineRadius * (cos1 * perp1.x + sin1 * perp2.x);
+            float offset1y = lineRadius * (cos1 * perp1.y + sin1 * perp2.y);
+            float offset1z = lineRadius * (cos1 * perp1.z + sin1 * perp2.z);
+            
+            float offset2x = lineRadius * (cos2 * perp1.x + sin2 * perp2.x);
+            float offset2y = lineRadius * (cos2 * perp1.y + sin2 * perp2.y);
+            float offset2z = lineRadius * (cos2 * perp1.z + sin2 * perp2.z);
+            
+            v1 = {start.x + offset1x, start.y + offset1y, start.z + offset1z};
+            v2 = {end.x + offset1x, end.y + offset1y, end.z + offset1z};
+            v3 = {end.x + offset2x, end.y + offset2y, end.z + offset2z};
+            v4 = {start.x + offset2x, start.y + offset2y, start.z + offset2z};
+            
+            // ¼ÆËã·¨ÏòÁ¿
+            Point3D edge1 = {v2.x - v1.x, v2.y - v1.y, v2.z - v1.z};
+            Point3D edge2 = {v4.x - v1.x, v4.y - v1.y, v4.z - v1.z};
+            Point3D normal = {
+                edge1.y * edge2.z - edge1.z * edge2.y,
+                edge1.z * edge2.x - edge1.x * edge2.z,
+                edge1.x * edge2.y - edge1.y * edge2.x
+            };
+            float nlen = sqrtf(normal.x*normal.x + normal.y*normal.y + normal.z*normal.z);
+            if (nlen > 1e-6f) {
+                normal.x /= nlen; normal.y /= nlen; normal.z /= nlen;
+            }
+            
+            // µÚÒ»¸öÈı½ÇĞÎ
+            file << "  facet normal " << normal.x << " " << normal.y << " " << normal.z << "\n";
+            file << "    outer loop\n";
+            file << "      vertex " << v1.x << " " << v1.y << " " << v1.z << "\n";
+            file << "      vertex " << v2.x << " " << v2.y << " " << v2.z << "\n";
+            file << "      vertex " << v4.x << " " << v4.y << " " << v4.z << "\n";
+            file << "    endloop\n";
+            file << "  endfacet\n";
+            triangleCount++;
+            
+            // µÚ¶ş¸öÈı½ÇĞÎ
+            file << "  facet normal " << normal.x << " " << normal.y << " " << normal.z << "\n";
+            file << "    outer loop\n";
+            file << "      vertex " << v2.x << " " << v2.y << " " << v2.z << "\n";
+            file << "      vertex " << v3.x << " " << v3.y << " " << v3.z << "\n";
+            file << "      vertex " << v4.x << " " << v4.y << " " << v4.z << "\n";
+            file << "    endloop\n";
+            file << "  endfacet\n";
+            triangleCount++;
+        }
+    }
+    
+    file << "endsolid TriDexelModel\n";
+    file.close();
+    
+    cout << "STLÎÄ¼şµ¼³öÍê³É! Èı½ÇĞÎÊıÁ¿: " << triangleCount << endl;
+    cout << "ÎÄ¼şÎ»ÖÃ: " << filename << endl;
+}
+
+// »æÖÆÏ³Ï÷Â·¾¶¹ì¼££¨ÓÃÓÚ¿ÉÊÓ»¯Ï³µ¶¾­¹ıµÄËùÓĞÎ»ÖÃ£©
+void drawMillingPath() {
+    if (millingPath.empty()) return;
+    
+    const int segments = 24;
+    const float radius = CYLINDER_RADIUS;
+    const float height = CYLINDER_HEIGHT;
+    
+    // »æÖÆÃ¿¸öÎ»ÖÃµÄÔ²ÖùÌåÂÖÀª£¨×ÏÉ«°ëÍ¸Ã÷£©
+    glColor4f(0.8f, 0.3f, 0.8f, 0.3f);  // ×ÏÉ«
+    glLineWidth(1.5f);
+    
+    for (const auto& pos : millingPath) {
+        glPushMatrix();
+        glTranslatef(pos.x, pos.y, pos.z);
+        
+        // »æÖÆ¶¥²¿Ô²ÖÜ
+        glBegin(GL_LINE_LOOP);
+        for (int i = 0; i < segments; ++i) {
+            float angle = 2.0f * M_PI * i / segments;
+            glVertex3f(radius * cos(angle), radius * sin(angle), height/2);
+        }
+        glEnd();
+        
+        // »æÖÆµ×²¿Ô²ÖÜ
+        glBegin(GL_LINE_LOOP);
+        for (int i = 0; i < segments; ++i) {
+            float angle = 2.0f * M_PI * i / segments;
+            glVertex3f(radius * cos(angle), radius * sin(angle), -height/2);
+        }
+        glEnd();
+        
+        glPopMatrix();
+    }
+    
+    // »æÖÆÂ·¾¶Á¬Ïß£¨ÏÔÊ¾Ï³µ¶ÒÆ¶¯¹ì¼££©
+    glColor4f(1.0f, 0.5f, 1.0f, 0.8f);  // ÁÁ×ÏÉ«
+    glLineWidth(2.0f);
+    glBegin(GL_LINE_STRIP);
+    for (const auto& pos : millingPath) {
+        glVertex3f(pos.x, pos.y, pos.z);
+    }
+    glEnd();
+    
+    glLineWidth(1.0f);
+}
+
 void display() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glLoadIdentity();
@@ -764,13 +1071,15 @@ void display() {
 
     drawCoordinateSystem();
     drawCylinder();
-    drawBox();  // »æÖÆ³¤·½Ìå
     
-    // »æÖÆ³¤·½ÌåµÄTri-DexelÏß¶Î
-    drawBoxTriDexel();
-
-    // »æÖÆ¿É¼ûÏß¶Î£¨°´Ë÷Òı·Ö×é×ÅÉ«£©
+    // »æÖÆÏ³Ï÷Â·¾¶¹ì¼££¨ÏÔÊ¾Ï³µ¶¾­¹ıµÄËùÓĞÎ»ÖÃ£©
+    // drawMillingPath();  // ÒÑ½ûÓÃµ¶¹ìÏÔÊ¾
+    
+    // ÏÈ»æÖÆÄÚ²¿µÄtri-dexelÏß¶Î£¨ÇĞ¸îºóµÄ½á¹û£©
     drawVisibleLineSegments();
+    
+    // Ö»»æÖÆºìÉ«±ß¿òÏß£¨²»»æÖÆ°ëÍ¸Ã÷Ãæ£©£¬ÈÃÇĞÏ÷Ğ§¹û¿É¼û
+    drawBoxWireframe();
     
     // »æÖÆÔ²ÖùÌåºÍ³¤·½ÌåµÄ½»½çÏß£¨»ÆÉ«¸ßÁÁ£©
     drawIntersectionBoundary();
@@ -798,14 +1107,108 @@ void reshape(int width, int height) {
 
 void keyboard(unsigned char key, int x, int y) {
     switch (key) {
-    case 27: exit(0); break;
+    case 27: 
+        cout << "\n[GPUÓÅ»¯] ÇåÀíÏÔ´æÊı¾İ..." << endl;
+        cleanupGPUData();
+        exit(0); 
+        break;
     case 'r': case 'R':
         cameraAngleX = 30.0f; cameraAngleY = 45.0f; cameraDistance = 25.0f; break;
     case 'w': case 'W': cameraDistance -= 1.0f; break;
-    case 's': case 'S': cameraDistance += 1.0f; break;
+    case 's': case 'S': 
+        // µ¼³öSTLÎÄ¼ş
+        {
+            // Éú³É´øÊ±¼ä´ÁµÄÎÄ¼şÃû
+            time_t now = time(0);
+            tm ltm;
+            localtime_s(&ltm, &now);
+            char filename[256];
+            sprintf_s(filename, "tridexel_cycle%d_%04d%02d%02d_%02d%02d%02d.stl",
+                     cycleCount,
+                     1900 + ltm.tm_year, 1 + ltm.tm_mon, ltm.tm_mday,
+                     ltm.tm_hour, ltm.tm_min, ltm.tm_sec);
+            exportToSTL(filename);
+        }
+        break;
     case 'p': case 'P': printIntersectionCoordinates(); break;
+    case ' ':  // ¿Õ¸ñ¼ü¿ØÖÆ¶¯»­²¥·Å/ÔİÍ£
+        animationEnabled = !animationEnabled;
+        cout << "¶¯»­" << (animationEnabled ? "¿ªÆô" : "ÔİÍ£") << endl;
+        break;
     }
     glutPostRedisplay();
+}
+
+// ¶¯»­¸üĞÂº¯Êı
+void updateAnimation(int value) {
+    if (animationEnabled) {
+        // ±£´æÉÏÒ»¸öÎ»ÖÃ
+        float lastPosX = cylinderPosX;
+        float lastPosY = cylinderPosY;
+        float lastPosZ = cylinderPosZ;
+        
+        // ¸üĞÂÊ±¼ä
+        animationTime += 0.016f;  // Ô¼60Hz
+        
+        // Ô²ĞÎ¹ì¼£ÔË¶¯£¨ÔÚXYÆ½Ãæ£©
+        float angle = animationTime * ANIMATION_SPEED;
+        
+        // ¼ì²âÖÜÆÚÍê³É£¨½Ç¶È´Ó½Ó½ü2¦Ğ»Øµ½0¸½½ü£©
+        float normalizedAngle = fmodf(angle, 2.0f * (float)M_PI);
+        if (normalizedAngle < lastAngle && lastAngle > (float)M_PI) {
+            cycleCount++;
+            cout << "Íê³ÉµÚ " << cycleCount << " ÖÜÆÚ" << endl;
+        }
+        lastAngle = normalizedAngle;
+        
+        cylinderPosX = ANIMATION_RADIUS * cosf(angle);
+        cylinderPosY = ANIMATION_RADIUS * sinf(angle);
+        cylinderPosZ = 0.0f;
+        
+        // ¼ÆËãÒÆ¶¯¾àÀë
+        float dx = cylinderPosX - lastPosX;
+        float dy = cylinderPosY - lastPosY;
+        float dz = cylinderPosZ - lastPosZ;
+        float distance = sqrtf(dx*dx + dy*dy + dz*dz);
+        
+        // Ìí¼Óµ½Â·¾¶ÀúÊ·£¨¸ü¿íËÉµÄÌõ¼ş£¬È·±£Â·¾¶µã±»Ìí¼Ó£©
+        if (distance > PATH_SAMPLE_DISTANCE) {
+            millingPath.push_back(CylinderPosition(cylinderPosX, cylinderPosY, cylinderPosZ));
+            
+            // ÏŞÖÆÂ·¾¶µãÊıÁ¿£¨³¬¹ıÉÏÏŞÊ±Ö»É¾³ı1¸ö×î¾ÉµÄµã£¬±£³ÖµãÊıÎÈ¶¨£©
+            // ÕâÑùGPU¼ÆËãÁ¿±£³Öºã¶¨£¬²»»á³öÏÖÏÈ¿ìºóÂıµÄÎÊÌâ
+            while (millingPath.size() > MAX_PATH_POINTS) {
+                millingPath.erase(millingPath.begin());
+            }
+            
+            // Êä³öµ÷ÊÔĞÅÏ¢£¨Ã¿100¸öµãÊä³öÒ»´Î£©
+            if (millingPath.size() % 100 == 0) {
+                cout << "Â·¾¶µãÊı: " << millingPath.size() << ", Î»ÖÃ: (" 
+                     << cylinderPosX << ", " << cylinderPosY << ", " << cylinderPosZ << ")" << endl;
+            }
+            
+            // ÖØĞÂ¼ÆËã²¼¶ûÔËËã£¨Í¬Ê±²âÊÔCPUºÍGPU£¬ÊµÊ±¶Ô±ÈĞÔÄÜ£©
+            // CPU°æ±¾
+            auto cpuStart = chrono::high_resolution_clock::now();
+            computeBooleanSubtractionCPU(millingPath);
+            auto cpuEnd = chrono::high_resolution_clock::now();
+            cpuTime = chrono::duration_cast<chrono::microseconds>(cpuEnd - cpuStart).count() / 1000.0f;
+            
+            // GPU°æ±¾£¨½á¹ûÓÃÓÚÏÔÊ¾£©
+            auto gpuStart = chrono::high_resolution_clock::now();
+            computeBooleanSubtraction();
+            auto gpuEnd = chrono::high_resolution_clock::now();
+            gpuTime = chrono::duration_cast<chrono::microseconds>(gpuEnd - gpuStart).count() / 1000.0f;
+            
+            // ¸üĞÂ¼ÓËÙ±È
+            speedup = cpuTime / gpuTime;
+        }
+        
+        glutPostRedisplay();
+    }
+    
+    // 16msºóÔÙ´Îµ÷ÓÃ£¨Ô¼60 FPS£©
+    glutTimerFunc(16, updateAnimation, 0);
 }
 
 void mouse(int button, int state, int x, int y) {
@@ -836,13 +1239,21 @@ void initializeOpenGL(int argc, char** argv) {
     lines = generateGridLines();
     int totalLines = lines.size();
     
+    // ³õÊ¼»¯GPUÊı¾İ³Ö¾Ã»¯£¨tri-dexelÏß¶Î³£×¤ÏÔ´æ£©
+    cout << "\n[GPUÓÅ»¯] ³õÊ¼»¯ÏÔ´æÊı¾İ..." << endl;
+    initializeGPUData(lines);
+    
+    // ³õÊ¼»¯Ï³Ï÷Â·¾¶£¨Îª¿Õ£¬ÈÃÏ³µ¶¿ªÊ¼ÒÆ¶¯ºó²Å»ıÀÛ£©
+    millingPath.clear();
+    // ²»Ìí¼Ó³õÊ¼Î»ÖÃ£¬ÈÃ³õÊ¼ÏÔÊ¾ÎªÍêÕûµÄ³¤·½Ìå¹¤¼ş
+    
     cout << "\n========== ĞÔÄÜ¶Ô±È²âÊÔ ==========" << endl;
     cout << "²âÊÔÊı¾İÁ¿: " << totalLines << " ÌõÉäÏß" << endl;
     
     // ===== CPU°æ±¾²âÊÔ =====
     cout << "\n[CPU¼ÆËã] ¿ªÊ¼..." << endl;
     auto cpuStart = chrono::high_resolution_clock::now();
-    computeBooleanSubtractionCPU();
+    computeBooleanSubtractionCPU(millingPath);  // ´«Èë¿ÕÂ·¾¶½øĞĞ»ù×¼²âÊÔ
     auto cpuEnd = chrono::high_resolution_clock::now();
     cpuTime = chrono::duration_cast<chrono::microseconds>(cpuEnd - cpuStart).count() / 1000.0f;
     cout << "[CPU¼ÆËã] Íê³É£¬ºÄÊ±: " << cpuTime << " ms" << endl;
@@ -871,6 +1282,7 @@ void initializeOpenGL(int argc, char** argv) {
     glutKeyboardFunc(keyboard);
     glutMouseFunc(mouse);
     glutMotionFunc(motion);
+    glutTimerFunc(16, updateAnimation, 0);  // Æô¶¯¶¯»­Ñ­»·
 
     glutMainLoop();
 }
